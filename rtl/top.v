@@ -57,7 +57,7 @@ module top (
     // ---- stage 5: network ----
     wire               mlp_done;
     wire signed [31:0] s0, s1, s2, s3;
-    mlp #(.SHIFT1(10)) u_mlp (                         // SHIFT1 printed by quant.py
+    mlp #(.SHIFT1(11)) u_mlp (                         // SHIFT1 printed by quant.py
         .clk(clk), .rst(rst), .start(row_done & window_full), .oldest(oldest),
         .feat_raddr(feat_raddr), .feat_rdata(feat_rdata), .done(mlp_done),
         .score0(s0), .score1(s1), .score2(s2), .score3(s3));
@@ -65,7 +65,7 @@ module top (
     // ---- stage 6: decision ----
     wire [1:0] best;
     wire       confident, lamp;
-    decision #(.MARGIN(32'sd2000), .K(4), .COOLDOWN(62)) u_dec (   // MARGIN from note 07
+    decision #(.MARGIN(32'sd500), .K(4), .COOLDOWN(62)) u_dec (   // MARGIN from note 07
         .clk(clk), .rst(rst), .valid(mlp_done), .s0(s0), .s1(s1), .s2(s2), .s3(s3),
         .best(best), .confident(confident), .fire_on(), .fire_off(), .lamp(lamp));
 

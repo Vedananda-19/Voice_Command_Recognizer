@@ -58,12 +58,18 @@ module features (
         end
     end
 
+    // FFT read data arrives 1 clock after the address, so delay k and busy to match it
+    reg [7:0] k0;  reg v0;
+    always @(posedge clk) begin
+        k0 <= k;  v0 <= busy;
+    end
+
     // ---- stage 1: absolute values ----
     reg [24:0] ar, ai;  reg [7:0] k1;  reg v1;
     always @(posedge clk) begin
         ar <= fft_re[24] ? -fft_re : fft_re;
         ai <= fft_im[24] ? -fft_im : fft_im;
-        k1 <= k;  v1 <= busy;
+        k1 <= k0;  v1 <= v0;
     end
 
     // ---- stage 2: magnitude ≈ max + min/2 ----

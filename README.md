@@ -13,9 +13,9 @@ mic → pdm_rx → frame_buffer → fft512 → features → mlp → decision →
 | Folder | Contents |
 |---|---|
 | `rtl/` | `pdm_rx`, `frame_buffer`, `butterfly`, `fft512`, `features`, `mlp`, `decision`, `uart_tx`, `top` |
-| `tb/` | one testbench per stage (`tb_pdm_rx`, `tb_frame_buffer`, `tb_fft512`, `tb_frontend`, `tb_mlp`, `tb_decision`) |
+| `tb/` | one testbench per stage (`tb_pdm_rx`, `tb_frame_buffer`, `tb_fft512`, `tb_frontend`, `tb_mlp`, `tb_decision`), plus `tb_wav` (everything after the mic) |
 | `constraints/` | `nexys4ddr.xdc` pin file |
-| `python/` | `golden.py` (bit-exact front end), `quant.py`, `train.py`, `record.py` |
+| `python/` | `golden.py` (bit-exact front end), `quant.py`, `train.py`, `record.py`, `try_wav.py` |
 | `mem/` | created by `train.py`: ROM tables, weights and test vectors |
 
 ## 1. Train (PC)
@@ -61,7 +61,21 @@ Swap in the other testbenches the same way. Pass conditions:
 | `tb_fft512` | no | `PASS` line |
 | `tb_decision` | no | `PASS` line |
 | `tb_frontend` | yes | `mismatches: 0` over 992 features |
-| `tb_mlp` | yes | `PASS` line; add `-Ptb_mlp.SHIFT1=<value>` to the iverilog command |
+| `tb_mlp` | yes | `PASS` line; add `"-Ptb_mlp.SHIFT1=<value>"` to the iverilog command (keep the quotes in PowerShell) |
+
+## 2b. Test your own recording without the board
+
+Record a word on your laptop (any rate, mono or stereo), then:
+
+```bash
+python python/try_wav.py my_on.wav
+```
+
+It pads 0.5 s of silence on each side, then runs the audio through:
+1. the golden model (Python, instant): prints every confident guess and when the lamp would switch
+2. `tb/tb_wav.sv` in Icarus (front end + MLP + decision, about 2 minutes per second of audio): checks that every score and command matches the golden model
+
+`SHIFT1`, `MARGIN`, `K` and `COOLDOWN` are read from `rtl/top.v`, so the answer is what the board would do with the same audio. Add `--no-sim` to skip the Verilog part. Only `pdm_rx` (the board mic) is not covered.
 
 ## 3. Build (Vivado)
 

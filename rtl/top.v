@@ -70,14 +70,6 @@ module top (
         .clk(clk), .rst(rst), .valid(mlp_done), .s0(s0), .s1(s1), .s2(s2), .s3(s3),
         .best(best), .confident(confident), .fire_on(), .fire_off(), .lamp(lamp));
 
-    // ---- debug: loudness bar (log scale) on LED[15:8] ----
-    reg [15:0] level;
-    always @(posedge clk) if (sample_valid) level <= sample[15] ? -sample : sample;
-    genvar g;
-    generate for (g = 0; g < 8; g = g + 1) begin : bar
-        assign led[8 + g] = (level[15:7] > (9'd1 << g));
-    end endgenerate
-
     // ---- recording: while BTNC is held, send each sample as 2 bytes (low byte first) ----
     reg       btn_meta, btn;
     reg       tx_start, send_hi;
@@ -100,6 +92,7 @@ module top (
     uart_tx #(.CLKS_PER_BIT(109)) u_tx (                // 100 MHz / 109 ≈ 921,600 baud
         .clk(clk), .rst(rst), .start(tx_start), .data(tx_data), .tx(uart_txd), .busy(tx_busy));
 
-    assign led[7:0] = {3'b000, confident, best, btn, lamp};
+    assign led[15:8] = 8'd0;                            // unused
+    assign led[7:0]  = {3'b000, confident, best, btn, lamp};
     assign lamp_out = lamp;
 endmodule

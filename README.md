@@ -151,7 +151,7 @@ Program it with **Hardware Manager → Auto Connect → Program Device**, then p
 | LED1 | BTNC is held (recording) |
 | LED3, LED2 | latest guess: `00` silence, `01` unknown, `10` on, `11` off |
 | LED4 | the latest guess was confident |
-| LED15–LED8 | loudness bar |
+| LED15–LED8 | unused (always off) |
 | **`lamp_out`** (Pmod JA, pin 1) | same as LED0, for external circuits |
 
 ### Connecting something to `lamp_out`
@@ -186,8 +186,7 @@ Start the script first, then hold **BTNC** while speaking. Cut the recording int
 
 | Symptom | Likely cause |
 |---|---|
-| Loudness LEDs never move | wrong pins, or reset held. Check the `.xdc`; press `CPU_RESET`. |
-| LED2–LED4 never light | the `.mem` files weren't loaded in Vivado (see step 3) |
+| LED2–LED4 never light | the `.mem` files weren't loaded in Vivado (see step 3); or the mic isn't working: record with `record.py` and listen to the file |
 | Guesses show, but LED0 never switches | `MARGIN` too high or `K` too big; check with `try_wav.py` on a board recording |
 | Always "unknown" | the board mic differs from the dataset: record your own clips and retrain |
 | Lamp switches by itself | `MARGIN` too low; raise it or `K` |

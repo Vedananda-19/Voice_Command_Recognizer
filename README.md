@@ -1,44 +1,87 @@
-# Voice Command Recognizer (Nexys 4 DDR)
+# Voice Command Recognizer on an FPGA
 
-Say **"on"** and LED0 lights up; say **"off"** and it goes out. Silence and other words are ignored.
-Built from the notes in `Aether/Notes/Hardware Notes/FPGA Voice Command Recognizer`.
+Say **"on"** and a light turns on. Say **"off"** and it turns off. Silence, noise and other words are ignored.
+
+Everything runs on a **Nexys 4 DDR** board (Artix-7 **xc7a100tcsg324-1**) using its built-in microphone. A small neural network, trained on a PC, does the recognition in hardware. The design is plain Verilog with no IP cores.
+
+---
+
+## Steps (short version)
+
+1. **Train** on the PC: `python python/train.py C:\data` (Speech Commands v2 dataset).
+2. **Copy two numbers** that `train.py` prints into `rtl/top.v`: `SHIFT1` and `MARGIN`.
+3. **Simulate** (optional but recommended): run `tb_frontend` and `tb_mlp` from `mem/` and check they pass.
+4. **Build** in Vivado: add `rtl/`, the 7 `.mem` tables, and the `.xdc`, then Generate Bitstream.
+5. **Program** the board and say "on" / "off". LED0 and the external pin `lamp_out` follow the command.
+
+Details for each step are below.
+
+---
+
+## How it works
 
 ```
-mic → pdm_rx → frame_buffer → fft512 → features → mlp → decision → LED
-       16 kHz    512/hop 256    bins     62×16 int8  4 scores  lamp
+ mic ─► pdm_rx ─► frame_buffer ─► fft512 ─► features ─► mlp ─► decision ─► LED0 / lamp_out
+        16 kHz     512 samples     256       62 × 16     4      on / off
+        samples    every 16 ms     bins      fingerprint scores
 ```
 
-## Folder layout
+| Stage | Module | What it does |
+|---|---|---|
+| 1 | `pdm_rx` | turns the mic's 1-bit stream into 16-bit samples, 16,000 per second |
+| 2 | `frame_buffer` | keeps the last 512 samples; every 256 new samples, sends a windowed frame |
+| 3 | `fft512` | converts the frame from time into frequencies |
+| 4 | `features` | squeezes the frequencies into 16 bands (log scale) and keeps the last ~1 s: a 62 × 16 "fingerprint" |
+| 5 | `mlp` | the neural network (992 → 32 → 4) gives a score to each class: silence, unknown, on, off |
+| 6 | `decision` | acts only when "on" or "off" wins clearly, 4 times in a row, then waits ~1 s |
+
+Everything runs on one 100 MHz clock. Each module passes a one-clock "done" pulse to the next one. The PC only does the training: `python/golden.py` does exactly the same integer maths as the hardware, so what passes in Python passes on the FPGA.
+
+---
+
+## Project layout
 
 | Folder | Contents |
 |---|---|
-| `rtl/` | `pdm_rx`, `frame_buffer`, `butterfly`, `fft512`, `features`, `mlp`, `decision`, `uart_tx`, `top` |
-| `tb/` | one testbench per stage (`tb_pdm_rx`, `tb_frame_buffer`, `tb_fft512`, `tb_frontend`, `tb_mlp`, `tb_decision`), plus `tb_wav` (everything after the mic) |
-| `constraints/` | `nexys4ddr.xdc` pin file |
-| `python/` | `golden.py` (bit-exact front end), `quant.py`, `train.py`, `record.py`, `try_wav.py` |
-| `mem/` | created by `train.py`: ROM tables, weights and test vectors |
+| `rtl/` | the hardware: `pdm_rx`, `frame_buffer`, `butterfly`, `fft512`, `features`, `mlp`, `decision`, `uart_tx`, `top` |
+| `tb/` | one testbench per stage, plus `tb_wav` (everything after the mic, fed from a `.wav`) |
+| `constraints/` | `nexys4ddr.xdc`, the pin assignments |
+| `python/` | `train.py` (training), `golden.py` (bit-exact model of the hardware), `quant.py` (int8 conversion), `try_wav.py` (test a recording), `record.py` (record through the board) |
+| `mem/` | made by `train.py`: lookup tables, network weights, and test vectors |
+
+---
 
 ## 1. Train (PC)
 
-1. Download and extract Google Speech Commands v2 (`speech_commands_v0.02.tar.gz`).
-2. Install packages and run:
+You need Python with `numpy`, `scipy`, `torch` and `pyserial`, and the **Google Speech Commands v2** dataset (`speech_commands_v0.02.tar.gz`, about 2.3 GB) extracted into a folder of its own.
 
 ```bash
 pip install -r python/requirements.txt
 ```
 
 ```bash
-python python/train.py path/to/speech_commands_v0.02
+python python/train.py C:\data
 ```
 
-It writes everything into `mem/` and prints:
-- test accuracy (float, integer, and their agreement)
-- a MARGIN sweep → pick a value and set `MARGIN` in `rtl/top.v`
-- `SHIFT1` → set it in `rtl/top.v` (`mlp #(.SHIFT1(...))`)
+The dataset folder must contain only the dataset: one folder per word (`on\`, `off\`, `yes\`, ...), `_background_noise_\`, `validation_list.txt` and `testing_list.txt`.
+
+At the end it prints:
+- **accuracy**, for the float network and the integer one the FPGA runs (they should be within ~2%)
+- **a MARGIN table**: pick the smallest value with acceptable false triggers
+- **`SHIFT1`**
+
+Put both numbers into `rtl/top.v`:
+
+```verilog
+mlp #(.SHIFT1(11)) u_mlp (                                   // SHIFT1 from train.py
+decision #(.MARGIN(32'sd500), .K(4), .COOLDOWN(62)) u_dec (  // MARGIN from the table
+```
+
+---
 
 ## 2. Simulate (Icarus Verilog)
 
-Run from the `mem/` folder so `$readmemh` finds the files:
+Run from `mem/`, so the testbenches find their files:
 
 ```bash
 cd mem
@@ -52,56 +95,106 @@ iverilog -g2012 -y ../rtl -Y .v -s tb_frontend -o sim ../tb/tb_frontend.sv
 vvp sim
 ```
 
-Swap in the other testbenches the same way. Pass conditions:
+Change the testbench name in both places to run another one:
 
-| Testbench | Needs `train.py` first? | Pass |
+| Testbench | Checks | Pass |
 |---|---|---|
-| `tb_pdm_rx` | no | `PASS` line |
-| `tb_frame_buffer` | no | `PASS` line |
-| `tb_fft512` | no | `PASS` line |
-| `tb_decision` | no | `PASS` line |
-| `tb_frontend` | yes | `mismatches: 0` over 992 features |
-| `tb_mlp` | yes | `PASS` line; add `"-Ptb_mlp.SHIFT1=<value>"` to the iverilog command (keep the quotes in PowerShell) |
+| `tb_pdm_rx` | mic receiver timing | `PASS` |
+| `tb_frame_buffer` | framing and window | `PASS` |
+| `tb_fft512` | FFT | `PASS` |
+| `tb_decision` | streak, margin, cooldown | `PASS` |
+| `tb_frontend` | frames → FFT → features, against Python | `mismatches: 0` |
+| `tb_mlp` | network scores, against Python | `PASS` (add `"-Ptb_mlp.SHIFT1=<value>"`, keeping the quotes in PowerShell) |
 
-## 2b. Test your own recording without the board
+`Unable to open ... .mem` messages in `tb_frame_buffer` and `tb_fft512` are expected: those two load their own test values.
 
-Record a word on your laptop (any rate, mono or stereo), then:
+**Test your own recording without the board:**
 
 ```bash
 python python/try_wav.py my_on.wav
 ```
 
-It pads 0.5 s of silence on each side, then runs the audio through:
-1. the golden model (Python, instant): prints every confident guess and when the lamp would switch
-2. `tb/tb_wav.sv` in Icarus (front end + MLP + decision, about 2 minutes per second of audio): checks that every score and command matches the golden model
+It runs the audio through the Python model (instant) and the Verilog simulation (about 2 minutes per second of audio), prints when the lamp would switch, and checks that both agree. It reads `SHIFT1`, `MARGIN`, `K` and `COOLDOWN` from `rtl/top.v`. Add `--no-sim` to skip the Verilog part.
 
-`SHIFT1`, `MARGIN`, `K` and `COOLDOWN` are read from `rtl/top.v`, so the answer is what the board would do with the same audio. Add `--no-sim` to skip the Verilog part. Only `pdm_rx` (the board mic) is not covered.
+---
 
 ## 3. Build (Vivado)
 
 1. New RTL project, part **xc7a100tcsg324-1**.
-2. Add `rtl/*.v` as design sources, and the 7 table files from `mem/` (`hann512_q15`, `tw512_re_q15`, `tw512_im_q15`, `w1`, `b1`, `w2`, `b2` `.mem`) as design sources too.
-3. Add `constraints/nexys4ddr.xdc`. Top module: `top`.
-4. Generate bitstream and program the board.
+2. **Add Sources → design sources → Add Directories:** `rtl/`. Untick "Copy sources into project".
+3. **Add the 7 memory files.** Folder import skips `.mem` files, so use the Tcl Console (change the path to your repo):
+
+   ```tcl
+   add_files -norecurse [glob C:/Voice_Command_Recognizer/mem/{hann512_q15,tw512_re_q15,tw512_im_q15,w1,b1,w2,b2}.mem]
+   ```
+
+   ```tcl
+   set_property file_type {Memory File} [get_files *.mem]
+   ```
+
+4. **Add Sources → constraints:** `constraints/nexys4ddr.xdc`.
+5. Check that `top` is the top module, then click **Generate Bitstream**.
+6. Before programming, check:
+   - Messages: no `could not open $readmem` warnings
+   - Utilization: about 11 BRAM and 5 DSP. Close to 0 BRAM means the `.mem` files were not loaded.
+   - Timing: WNS ≥ 0
+
+---
 
 ## 4. On the board
 
-| LED | Meaning |
+Program it with **Hardware Manager → Auto Connect → Program Device**, then press `CPU_RESET` once.
+
+| Output | Meaning |
 |---|---|
-| LED0 | the lamp (on/off command) |
-| LED1 | BTNC held (recording) |
-| LED3:2 | latest best class: 0 silence, 1 unknown, 2 on, 3 off |
-| LED4 | latest guess passed the margin |
-| LED15:8 | loudness bar |
+| LED0 | the lamp: on after "on", off after "off" |
+| LED1 | BTNC is held (recording) |
+| LED3, LED2 | latest guess: `00` silence, `01` unknown, `10` on, `11` off |
+| LED4 | the latest guess was confident |
+| LED15–LED8 | loudness bar |
+| **`lamp_out`** (Pmod JA, pin 1) | same as LED0, for external circuits |
 
-`CPU_RESET` resets the design.
+### Connecting something to `lamp_out`
 
-## 5. Record your own voice (optional, improves accuracy)
+`lamp_out` is pin 1 of the **JA** Pmod header. Pin 1 is marked on the board's silkscreen. Each Pmod header has two rows of 6 pins:
 
-Start the script first, then hold **BTNC** while speaking:
+```
+ row 1:  pin 1   pin 2   pin 3   pin 4   pin 5 = GND   pin 6 = 3.3 V
+ row 2:  pin 7   pin 8   pin 9   pin 10  pin 11 = GND  pin 12 = 3.3 V
+
+ pin 1 = lamp_out
+```
+
+- **An LED:** pin 1 → 330 Ω resistor → LED (long leg) → LED (short leg) → GND.
+- **A relay, motor or anything bigger:** don't drive it straight from the pin. It's 3.3 V and only a few mA. Use a transistor or a relay module with its own supply, connecting only the signal and GND to the board.
+
+---
+
+## 5. Improve accuracy with your own voice
+
+The board's mic sounds different from the dataset's recordings. Recording yourself through the board helps the most.
 
 ```bash
 python python/record.py COM5 my_recording.wav
 ```
 
-Cut the recording into 1-s clips (e.g. in Audacity), drop them into the dataset's `on/`, `off/` or another word folder, and rerun `train.py`. Clips not in the dataset's lists go into the training split automatically.
+Start the script first, then hold **BTNC** while speaking. Cut the recording into 1-s clips (in Audacity, for example), put them into the dataset's `on\`, `off\` or another word's folder, and run `train.py` again. Your clips go into the training set automatically.
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause |
+|---|---|
+| Loudness LEDs never move | wrong pins, or reset held. Check the `.xdc`; press `CPU_RESET`. |
+| LED2–LED4 never light | the `.mem` files weren't loaded in Vivado (see step 3) |
+| Guesses show, but LED0 never switches | `MARGIN` too high or `K` too big; check with `try_wav.py` on a board recording |
+| Always "unknown" | the board mic differs from the dataset: record your own clips and retrain |
+| Lamp switches by itself | `MARGIN` too low; raise it or `K` |
+| `tb_mlp` fails | `SHIFT1` on the command line doesn't match `train.py` |
+
+---
+
+## Credits
+
+Built from the study notes *FPGA Voice Command Recognizer* (notes 00–08). Training data: Google Speech Commands v2 (CC BY 4.0).

@@ -30,3 +30,5 @@ set_property -dict { PACKAGE_PIN V11 IOSTANDARD LVCMOS33 } [get_ports {led[15]}]
 set_property -dict { PACKAGE_PIN N17 IOSTANDARD LVCMOS33 } [get_ports btn_c]
 ## USB-UART: FPGA output (UART_RXD_OUT in the master file)
 set_property -dict { PACKAGE_PIN D4  IOSTANDARD LVCMOS33 } [get_ports uart_txd]
+## External lamp output: Pmod JA pin 1 (JA[1] in the master file), 3.3 V
+set_property -dict { PACKAGE_PIN C17 IOSTANDARD LVCMOS33 } [get_ports lamp_out]

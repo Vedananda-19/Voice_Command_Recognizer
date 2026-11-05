@@ -8,7 +8,8 @@ module top (
     input  wire        m_data,
     input  wire        btn_c,        // BTNC, pin N17: hold to stream audio over UART
     output wire        uart_txd,     // UART_RXD_OUT, pin D4 (FPGA → PC)
-    output wire [15:0] led
+    output wire [15:0] led,
+    output wire        lamp_out      // Pmod JA pin 1 (C17): same as LED0, for external LEDs/circuits
 );
     // ---- reset: invert (button is active-low) and synchronise (2 flip-flops) ----
     reg rst_meta, rst;
@@ -100,4 +101,5 @@ module top (
         .clk(clk), .rst(rst), .start(tx_start), .data(tx_data), .tx(uart_txd), .busy(tx_busy));
 
     assign led[7:0] = {3'b000, confident, best, btn, lamp};
+    assign lamp_out = lamp;
 endmodule

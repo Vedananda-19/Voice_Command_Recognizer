@@ -6,9 +6,8 @@
 module tb_wav;
     parameter NSAMP    = 16128;
     parameter SHIFT1   = 10;
-    parameter MARGIN   = 2000;
-    parameter K        = 4;
-    parameter COOLDOWN = 62;
+    parameter MARGIN    = 400;
+    parameter WAIT_TIME = 50;
 
     reg clk = 0, rst = 1;
     always #5 clk = ~clk;
@@ -63,10 +62,10 @@ module tb_wav;
 
     // ---- decision ----
     wire [1:0] best;
-    wire       confident, fire_on, fire_off, lamp;
-    decision #(.MARGIN(MARGIN), .K(K), .COOLDOWN(COOLDOWN)) u_dec (
+    wire       confident, lamp;
+    decision #(.MARGIN(MARGIN), .WAIT_TIME(WAIT_TIME)) u_dec (
         .clk(clk), .rst(rst), .valid(mlp_done), .s0(s0), .s1(s1), .s2(s2), .s3(s3),
-        .best(best), .confident(confident), .fire_on(fire_on), .fire_off(fire_off), .lamp(lamp));
+        .best(best), .confident(confident), .lamp(lamp));
 
     // ---- stimulus: one sample every 200 clocks, so a hop (51,200 clocks) is longer
     //      than FFT + features + MLP (~42,000). The board has 6,250 clocks per sample. ----
@@ -86,12 +85,15 @@ module tb_wav;
     end
 
     // ---- report every inference and every command ----
+    // a command fired when decision moves from LISTEN into WAIT
+    reg was_waiting = 0;
     always @(posedge clk) begin
         if (mlp_done) begin
             $display("SCORES %0d %0d %0d %0d %0d", n_inf, s0, s1, s2, s3);
             n_inf = n_inf + 1;
         end
-        if (fire_on)  $display("FIRE on %0d",  n_inf - 1);  // fires 1 clock after mlp_done
-        if (fire_off) $display("FIRE off %0d", n_inf - 1);
+        if (u_dec.state === 1'b1 && !was_waiting)
+            $display("FIRE %0s %0d", lamp ? "on" : "off", n_inf - 1);
+        was_waiting <= (u_dec.state === 1'b1);
     end
 endmodule

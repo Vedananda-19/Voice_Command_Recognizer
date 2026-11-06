@@ -27,11 +27,11 @@ def load_any(path):
     return np.clip(np.round(x), -32768, 32767).astype(np.int16)
 
 def board_params():
-    """SHIFT1, MARGIN, K, COOLDOWN exactly as set in rtl/top.v, so the answer matches the board."""
+    """SHIFT1, MARGIN, WAIT_TIME exactly as set in rtl/top.v, so the answer matches the board."""
     top = open(os.path.join(ROOT, "rtl", "top.v"), encoding="utf-8").read()
     get = lambda pat: int(re.search(pat, top).group(1))
     return dict(SHIFT1=get(r"SHIFT1\((\d+)\)"), MARGIN=get(r"MARGIN\((?:32'sd)?(\d+)\)"),
-                K=get(r"\.K\((\d+)\)"), COOLDOWN=get(r"COOLDOWN\((\d+)\)"))
+                WAIT_TIME=get(r"WAIT_TIME\((\d+)\)"))
 
 def read_mem(name, bits):
     """Inverse of write_mem: hex lines → signed integers."""
@@ -46,28 +46,23 @@ def golden_scores(x, S):
     X = np.stack([feats[t - 61:t + 1].reshape(-1) for t in range(61, len(feats))])
     return int_forward(X, q)[0]
 
-def decide(scores, MARGIN, K, COOLDOWN):
+def decide(scores, MARGIN, WAIT_TIME):
     """Model of decision.v. Returns (best, confident) per inference and the fired commands."""
-    state, streak, last, cd = "LISTEN", 0, None, 0
+    state, last, wait_count = "LISTEN", 0, 0
     out, fires = [], []
     for i, s in enumerate(scores):
-        b = int(np.argmax(s))                               # ties → lowest index, like the comparison tree
-        conf = s[b] - np.sort(s)[-2] > MARGIN
-        is_cmd = conf and b >= 2
-        out.append((b, conf))
+        idx = int(np.argmax(s))                             # ties → lowest index, like decision.v
+        sure = s[idx] - np.sort(s)[-2] > MARGIN
+        command = sure and idx >= 2
+        out.append((idx, sure))
         if state == "LISTEN":
-            if is_cmd and b == last and streak != 0:
-                if streak == K - 1:
-                    fires.append((i, NAMES[b])); state, cd, streak = "COOL", 0, 0
-                else:
-                    streak += 1
-            else:
-                streak = 1 if is_cmd else 0
-            last = b
-        elif cd == COOLDOWN - 1:
-            state, streak = "LISTEN", 0
+            if command and idx == last:                     # same command twice in a row
+                fires.append((i, NAMES[idx])); state, wait_count = "WAIT", 0
+            last = idx if command else 0
+        elif wait_count == WAIT_TIME - 1:
+            state, last = "LISTEN", 0
         else:
-            cd += 1
+            wait_count += 1
     return out, fires
 
 def verilog_run(x, p):
@@ -89,7 +84,7 @@ p = board_params()
 t_of = lambda i: ((i + 61) * 256 + 512 - PAD) / 16000      # end of inference i's window, in the original wav
 
 scores = golden_scores(x, p["SHIFT1"])
-res, fires = decide(scores, p["MARGIN"], p["K"], p["COOLDOWN"])
+res, fires = decide(scores, p["MARGIN"], p["WAIT_TIME"])
 print(f"{path}: {(len(x) - 2 * PAD) / 16000:.2f} s, {len(scores)} inferences, "
       + ", ".join(f"{k}={v}" for k, v in p.items()))
 print("golden model, confident guesses (time = end of the 1-s window):")

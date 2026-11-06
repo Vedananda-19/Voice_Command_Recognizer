@@ -1,20 +1,19 @@
-// Source: 04 Building the Voice Fingerprint - Features.md
-// Bins 2..255 → 16 mel-spaced band sums → log2 (Q3) → int8 → feature RAM row.
+// features: fft bins to 16 log band energies per frame
 module features (
     input  wire               clk,
     input  wire               rst,
-    input  wire               start,          // = fft done
+    input  wire               start,
     output wire        [8:0]  fft_rd_addr,
-    input  wire signed [24:0] fft_re,         // valid 1 clock after fft_rd_addr
+    input  wire signed [24:0] fft_re,
     input  wire signed [24:0] fft_im,
     output reg                feat_we,
-    output reg         [9:0]  feat_waddr,     // {frame_idx, band}
+    output reg         [9:0]  feat_waddr,     //{row, band}
     output reg  signed [7:0]  feat_wdata,
-    output reg         [5:0]  newest,         // frame slot just completed (0..61)
-    output reg                row_done,       // 1-clock pulse per completed row
-    output reg                window_full     // 62 rows written since reset
+    output reg         [5:0]  newest,         //row just finished
+    output reg                row_done,
+    output reg                window_full     //all 62 rows filled
 );
-    // ---- band end ROM ----
+    // band edges
     function [7:0] band_end(input [3:0] b);
         case (b)
             4'd0: band_end = 8'd5;    4'd1: band_end = 8'd10;
@@ -28,7 +27,7 @@ module features (
         endcase
     endfunction
 
-    // ---- log2 in Q3: 8*(leading-one position) + next 3 bits ----
+    // log2: leading one position and the next 3 bits
     function [7:0] log2q3(input [31:0] v);
         integer i;
         reg [4:0] p;
@@ -38,15 +37,15 @@ module features (
             p = 0; found = 0;
             for (i = 31; i >= 0; i = i - 1)
                 if (!found && v[i]) begin p = i; found = 1; end
-            if (p >= 3) fr = v >> (p - 3);      // keeps the 3 bits under the leading 1
+            if (p >= 3) fr = v >> (p - 3);
             else        fr = v << (3 - p);
             log2q3 = found ? ({p, 3'b000} + fr) : 8'd0;
         end
     endfunction
 
-    // ---- stage 0: bin counter ----
+    // bin counter
     reg       busy;
-    reg [7:0] k;                                // bins 2..255
+    reg [7:0] k;                                //bins 2 to 255
     assign fft_rd_addr = {1'b0, k};
 
     always @(posedge clk) begin
@@ -58,13 +57,13 @@ module features (
         end
     end
 
-    // FFT read data arrives 1 clock after the address, so delay k and busy to match it
+    // fft data comes one clock late, so delay k and busy
     reg [7:0] k0;  reg v0;
     always @(posedge clk) begin
         k0 <= k;  v0 <= busy;
     end
 
-    // ---- stage 1: absolute values ----
+    // absolute values
     reg [24:0] ar, ai;  reg [7:0] k1;  reg v1;
     always @(posedge clk) begin
         ar <= fft_re[24] ? -fft_re : fft_re;
@@ -72,14 +71,14 @@ module features (
         k1 <= k0;  v1 <= v0;
     end
 
-    // ---- stage 2: magnitude ≈ max + min/2 ----
+    // magnitude, max + min/2
     reg [25:0] mag;  reg [7:0] k2;  reg v2;
     always @(posedge clk) begin
         mag <= (ar > ai) ? (ar + (ai >> 1)) : (ai + (ar >> 1));
         k2 <= k1;  v2 <= v1;
     end
 
-    // ---- stage 3: band accumulation ----
+    // add up each band
     reg [31:0] acc, band_sum;
     reg [3:0]  band, band_out;
     reg        emit;
@@ -88,7 +87,7 @@ module features (
         if (rst || start) begin acc <= 0; band <= 0; end
         else if (v2) begin
             if (k2 == band_end(band)) begin
-                band_sum <= acc + mag;           // finished band
+                band_sum <= acc + mag;
                 band_out <= band;
                 emit     <= 1'b1;
                 acc      <= 0;
@@ -98,9 +97,9 @@ module features (
         end
     end
 
-    // ---- stage 4: log2 → int8 → feature RAM; frame bookkeeping ----
-    reg [5:0] fidx;                              // current row slot 0..61
-    reg [5:0] rows;                              // saturating row count
+    // log2 and write the row
+    reg [5:0] fidx;                              //current row
+    reg [5:0] rows;                              //rows written
     wire [7:0] L = log2q3(band_sum);
     always @(posedge clk) begin
         feat_we  <= 1'b0;
@@ -110,8 +109,8 @@ module features (
         end else if (emit) begin
             feat_we    <= 1'b1;
             feat_waddr <= {fidx, band_out};
-            feat_wdata <= {~L[7], L[6:0]};       // L - 128 as signed int8
-            if (band_out == 4'd15) begin         // row complete
+            feat_wdata <= {~L[7], L[6:0]};       //L - 128
+            if (band_out == 4'd15) begin
                 newest   <= fidx;
                 row_done <= 1'b1;
                 fidx     <= (fidx == 6'd61) ? 6'd0 : fidx + 1'b1;

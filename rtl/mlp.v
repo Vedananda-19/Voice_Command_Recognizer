@@ -1,20 +1,19 @@
-// Source: 05 The Brain - Tiny Neural Network in Hardware.md
-// 992 → 32 (ReLU, int8) → 4 (int32 scores). One MAC, 3-stage pipeline.
+// mlp: 992 inputs, 32 hidden, 4 scores, one multiplier
 module mlp #(
-    parameter SHIFT1 = 8                       // requant shift from the training script
+    parameter SHIFT1 = 8                       //from train.py
 )(
     input  wire               clk,
     input  wire               rst,
-    input  wire               start,           // row_done && window_full
-    input  wire        [5:0]  oldest,          // slot of the oldest feature row
-    output wire        [9:0]  feat_raddr,      // to feature RAM (1-clock read)
+    input  wire               start,
+    input  wire        [5:0]  oldest,          //oldest feature row
+    output wire        [9:0]  feat_raddr,
     input  wire signed [7:0]  feat_rdata,
-    output reg                done,            // 1-clock pulse
+    output reg                done,
     output reg  signed [31:0] score0, score1, score2, score3
 );
     localparam NIN1 = 992, NH = 32, NOUT = 4;
 
-    // ---------- parameters from Python ----------
+    // weights and biases
     reg signed [7:0]  w1 [0:NIN1*NH-1];
     reg signed [31:0] b1 [0:NH-1];
     reg signed [7:0]  w2 [0:NH*NOUT-1];
@@ -23,38 +22,39 @@ module mlp #(
         $readmemh("w1.mem", w1);  $readmemh("b1.mem", b1);
         $readmemh("w2.mem", w2);  $readmemh("b2.mem", b2);
     end
-    reg signed [7:0] h [0:NH-1];               // hidden activations
+    reg signed [7:0] h [0:NH-1];               //hidden layer
 
-    // ---------- controller ----------
-    localparam S_IDLE = 3'd0, S_LOAD = 3'd1, S_RUN = 3'd2, S_WAIT = 3'd3, S_STORE = 3'd4;
+    // controller
+    localparam S_IDLE = 3'd0, S_LOAD = 3'd1, S_RUN = 3'd2,
+               S_WAIT = 3'd3, S_STORE = 3'd4;
     reg  [2:0]  state;
-    reg         layer;                          // 0 = hidden, 1 = output
+    reg         layer;                          //0 hidden, 1 output
     reg  [5:0]  neuron;
-    reg  [9:0]  j;                              // input index
-    reg  [14:0] waddr;                          // running weight address
+    reg  [9:0]  j;                              //input index
+    reg  [14:0] waddr;                          //weight address
     reg         wait_cnt;
     reg  signed [31:0] acc;
 
     wire [9:0] n_in      = layer ? NH   : NIN1;
     wire [5:0] n_neurons = layer ? NOUT : NH;
 
-    // feature address: row = oldest + j/16 (mod 62), band = j % 16
+    // feature address, starts at the oldest row
     wire [6:0] row_sum = oldest + j[9:4];
     wire [5:0] slot    = (row_sum >= 7'd62) ? row_sum - 7'd62 : row_sum[5:0];
     assign feat_raddr  = {slot, j[3:0]};
 
-    // requantise + ReLU
+    // back to 8 bits and relu
     function signed [7:0] requant(input signed [31:0] a);
         reg signed [31:0] r;
         begin
             r = (a + (32'sd1 <<< (SHIFT1-1))) >>> SHIFT1;
-            if (a <= 0)       requant = 8'sd0;      // ReLU
-            else if (r > 127) requant = 8'sd127;    // saturate
+            if (a <= 0)       requant = 8'sd0;      //relu
+            else if (r > 127) requant = 8'sd127;    //clamp
             else              requant = r[7:0];
         end
     endfunction
 
-    // ---------- stage 1: memory reads (1-clock latency) ----------
+    // read memories
     reg signed [7:0] w1q, w2q, hq;
     reg              v1;
     always @(posedge clk) begin
@@ -66,7 +66,7 @@ module mlp #(
     wire signed [7:0] wq = layer ? w2q : w1q;
     wire signed [7:0] xq = layer ? hq  : feat_rdata;
 
-    // ---------- stage 2: multiply ----------
+    // multiply
     reg signed [15:0] prod;
     reg               v2;
     always @(posedge clk) begin
@@ -74,13 +74,13 @@ module mlp #(
         v2   <= v1;
     end
 
-    // ---------- stage 3 + FSM: accumulate, sequence ----------
+    // accumulate and control
     always @(posedge clk) begin
         done <= 1'b0;
         if (rst) begin
             state <= S_IDLE;
         end else begin
-            if (v2) acc <= acc + prod;               // accumulate (overridden in LOAD)
+            if (v2) acc <= acc + prod;               //load state overrides this
             case (state)
                 S_IDLE: if (start) begin
                     layer <= 0; neuron <= 0; waddr <= 0; state <= S_LOAD;

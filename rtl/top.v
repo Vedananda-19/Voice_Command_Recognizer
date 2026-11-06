@@ -1,27 +1,26 @@
-// Source: 08 Building It Step by Step - Lab Plan and Testing.md
-// Voice command recognizer — top level (Nexys 4 DDR, XC7A100T).
+// top: voice command recognizer, nexys 4 ddr
 module top (
-    input  wire        clk,          // CLK100MHZ, pin E3
-    input  wire        cpu_resetn,   // CPU_RESETN button, pin C12, ACTIVE-LOW
-    output wire        m_clk,        // on-board PDM mic
+    input  wire        clk,          //100 MHz
+    input  wire        cpu_resetn,   //reset button, active low
+    output wire        m_clk,        //mic
     output wire        m_lrsel,
     input  wire        m_data,
-    input  wire        btn_c,        // BTNC, pin N17: hold to stream audio over UART
-    output wire        uart_txd,     // UART_RXD_OUT, pin D4 (FPGA → PC)
+    input  wire        btn_c,        //hold to record
+    output wire        uart_txd,     //to pc
     output wire [15:0] led,
-    output wire        lamp_out      // Pmod JA pin 1 (C17): same as LED0, for external LEDs/circuits
+    output wire        lamp_out      //pmod ja1, same as led0
 );
-    // ---- reset: invert (button is active-low) and synchronise (2 flip-flops) ----
+    // reset
     reg rst_meta, rst;
     always @(posedge clk) begin rst_meta <= ~cpu_resetn; rst <= rst_meta; end
 
-    // ---- stage 1: microphone ----
+    // mic
     wire signed [15:0] sample;
     wire               sample_valid;
     pdm_rx u_mic (.clk(clk), .rst(rst), .m_clk(m_clk), .m_lrsel(m_lrsel), .m_data(m_data),
                   .sample(sample), .sample_valid(sample_valid));
 
-    // ---- stage 2: frames ----
+    // frames
     wire               fb_we, frame_done;
     wire        [8:0]  fb_waddr;
     wire signed [15:0] fb_wdata;
@@ -29,7 +28,7 @@ module top (
                        .fft_we(fb_we), .fft_waddr(fb_waddr), .fft_wdata(fb_wdata),
                        .frame_done(frame_done));
 
-    // ---- stage 3: FFT ----
+    // fft
     wire               fft_done;
     wire        [8:0]  fft_rd_addr;
     wire signed [24:0] fft_re, fft_im;
@@ -37,7 +36,7 @@ module top (
                   .start(frame_done), .done(fft_done),
                   .rd_addr(fft_rd_addr), .rd_re(fft_re), .rd_im(fft_im));
 
-    // ---- stage 4: features + feature RAM (1024 × 8, simple dual-port BRAM) ----
+    // features and feature ram
     wire               feat_we, row_done, window_full;
     wire        [9:0]  feat_waddr, feat_raddr;
     wire signed [7:0]  feat_wdata;
@@ -55,22 +54,22 @@ module top (
     end
     wire [5:0] oldest = (newest == 6'd61) ? 6'd0 : newest + 1'b1;
 
-    // ---- stage 5: network ----
+    // network
     wire               mlp_done;
     wire signed [31:0] s0, s1, s2, s3;
-    mlp #(.SHIFT1(11)) u_mlp (                         // SHIFT1 printed by quant.py
+    mlp #(.SHIFT1(11)) u_mlp (                         //from train.py
         .clk(clk), .rst(rst), .start(row_done & window_full), .oldest(oldest),
         .feat_raddr(feat_raddr), .feat_rdata(feat_rdata), .done(mlp_done),
         .score0(s0), .score1(s1), .score2(s2), .score3(s3));
 
-    // ---- stage 6: decision ----
+    // decision
     wire [1:0] best;
     wire       confident, lamp;
-    decision #(.MARGIN(32'sd500), .K(4), .COOLDOWN(62)) u_dec (   // MARGIN from note 07
+    decision #(.MARGIN(400), .WAIT_TIME(50)) u_dec (
         .clk(clk), .rst(rst), .valid(mlp_done), .s0(s0), .s1(s1), .s2(s2), .s3(s3),
-        .best(best), .confident(confident), .fire_on(), .fire_off(), .lamp(lamp));
+        .best(best), .confident(confident), .lamp(lamp));
 
-    // ---- recording: while BTNC is held, send each sample as 2 bytes (low byte first) ----
+    // recording, sends each sample as two bytes while btnc is held
     reg       btn_meta, btn;
     reg       tx_start, send_hi;
     reg [7:0] tx_data, hi_byte;
@@ -89,10 +88,11 @@ module top (
         end
     end
 
-    uart_tx #(.CLKS_PER_BIT(109)) u_tx (                // 100 MHz / 109 ≈ 921,600 baud
-        .clk(clk), .rst(rst), .start(tx_start), .data(tx_data), .tx(uart_txd), .busy(tx_busy));
+    uart_tx #(.CLKS_PER_BIT(109)) u_tx (                //921600 baud
+        .clk(clk), .rst(rst), .start(tx_start), .data(tx_data),
+        .tx(uart_txd), .busy(tx_busy));
 
-    assign led[15:8] = 8'd0;                            // unused
+    assign led[15:8] = 8'd0;                            //unused
     assign led[7:0]  = {3'b000, confident, best, btn, lamp};
     assign lamp_out = lamp;
 endmodule

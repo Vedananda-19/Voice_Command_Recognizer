@@ -33,7 +33,7 @@ Details for each step are below.
 | 3 | `fft512` | converts the frame from time into frequencies |
 | 4 | `features` | squeezes the frequencies into 16 bands (log scale) and keeps the last ~1 s: a 62 × 16 "fingerprint" |
 | 5 | `mlp` | the neural network (992 → 32 → 4) gives a score to each class: silence, unknown, on, off |
-| 6 | `decision` | acts only when "on" or "off" wins clearly, 4 times in a row, then waits ~1 s |
+| 6 | `decision` | acts only when "on" or "off" wins clearly twice in a row, then waits ~0.8 s |
 
 Everything runs on one 100 MHz clock. Each module passes a one-clock "done" pulse to the next one. The PC only does the training: `python/golden.py` does exactly the same integer maths as the hardware, so what passes in Python passes on the FPGA.
 
@@ -74,7 +74,7 @@ Put both numbers into `rtl/top.v`:
 
 ```verilog
 mlp #(.SHIFT1(11)) u_mlp (                                   // SHIFT1 from train.py
-decision #(.MARGIN(32'sd500), .K(4), .COOLDOWN(62)) u_dec (  // MARGIN from the table
+decision #(.MARGIN(400), .WAIT_TIME(50)) u_dec (             // MARGIN from the table
 ```
 
 ---
@@ -102,7 +102,7 @@ Change the testbench name in both places to run another one:
 | `tb_pdm_rx` | mic receiver timing | `PASS` |
 | `tb_frame_buffer` | framing and window | `PASS` |
 | `tb_fft512` | FFT | `PASS` |
-| `tb_decision` | streak, margin, cooldown | `PASS` |
+| `tb_decision` | twice in a row, margin, wait | `PASS` |
 | `tb_frontend` | frames → FFT → features, against Python | `mismatches: 0` |
 | `tb_mlp` | network scores, against Python | `PASS` (add `"-Ptb_mlp.SHIFT1=<value>"`, keeping the quotes in PowerShell) |
 
@@ -114,7 +114,7 @@ Change the testbench name in both places to run another one:
 python python/try_wav.py my_on.wav
 ```
 
-It runs the audio through the Python model (instant) and the Verilog simulation (about 2 minutes per second of audio), prints when the lamp would switch, and checks that both agree. It reads `SHIFT1`, `MARGIN`, `K` and `COOLDOWN` from `rtl/top.v`. Add `--no-sim` to skip the Verilog part.
+It runs the audio through the Python model (instant) and the Verilog simulation (about 2 minutes per second of audio), prints when the lamp would switch, and checks that both agree. It reads `SHIFT1`, `MARGIN` and `WAIT_TIME` from `rtl/top.v`. Add `--no-sim` to skip the Verilog part.
 
 ---
 
@@ -187,9 +187,9 @@ Start the script first, then hold **BTNC** while speaking. Cut the recording int
 | Symptom | Likely cause |
 |---|---|
 | LED2–LED4 never light | the `.mem` files weren't loaded in Vivado (see step 3); or the mic isn't working: record with `record.py` and listen to the file |
-| Guesses show, but LED0 never switches | `MARGIN` too high or `K` too big; check with `try_wav.py` on a board recording |
+| Guesses show, but LED0 never switches | `MARGIN` too high; check with `try_wav.py` on a board recording |
 | Always "unknown" | the board mic differs from the dataset: record your own clips and retrain |
-| Lamp switches by itself | `MARGIN` too low; raise it or `K` |
+| Lamp switches by itself | `MARGIN` too low; raise it |
 | `tb_mlp` fails | `SHIFT1` on the command line doesn't match `train.py` |
 
 ---

@@ -1,5 +1,4 @@
-// UART transmitter, 8 data bits, no parity, 1 stop bit (8N1).
-// Pulse start for one clock with data; busy stays high until the stop bit ends.
+// uart_tx: 8 data bits, 1 stop bit
 module uart_tx #(
     parameter CLKS_PER_BIT = 109
 )(
@@ -10,9 +9,9 @@ module uart_tx #(
     output wire       tx,
     output reg        busy
 );
-    reg [9:0] shift;                            // {stop, data[7:0], start}, sent LSB first
-    reg [3:0] bits;                             // which of the 10 bits is on the line
-    reg [7:0] cnt;                              // clocks within the current bit
+    reg [9:0] shift;                            //stop, data, start
+    reg [3:0] bits;                             //bit number
+    reg [7:0] cnt;                              //clock count
 
     always @(posedge clk) begin
         if (rst) busy <= 1'b0;
@@ -32,5 +31,5 @@ module uart_tx #(
         end
     end
 
-    assign tx = busy ? shift[0] : 1'b1;         // line idles high
+    assign tx = busy ? shift[0] : 1'b1;         //idle high
 endmodule

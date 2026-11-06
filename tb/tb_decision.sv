@@ -1,22 +1,16 @@
 `timescale 1ns/1ps
 
-// TEST 6: decision. Streak, margin and cooldown rules decide when the lamp switches.
+// TEST 6: decision. Twice in a row, margin and wait rules decide when the lamp switches.
 module tb_decision;
     reg clk = 0, rst = 1, valid = 0;
     reg signed [31:0] s0 = 0, s1 = 0, s2 = 0, s3 = 0;
     wire [1:0] best;
-    wire confident, fire_on, fire_off, lamp;
-    integer i, ons = 0, offs = 0;
+    wire confident, lamp;
+    integer i;
     always #5 clk = ~clk;
 
     decision dut (.clk(clk), .rst(rst), .valid(valid), .s0(s0), .s1(s1), .s2(s2), .s3(s3),
-                  .best(best), .confident(confident), .fire_on(fire_on), .fire_off(fire_off),
-                  .lamp(lamp));          // defaults: MARGIN 2000, K 4, COOLDOWN 62
-
-    always @(posedge clk) begin
-        if (fire_on)  ons  = ons + 1;
-        if (fire_off) offs = offs + 1;
-    end
+                  .best(best), .confident(confident), .lamp(lamp));   // defaults: MARGIN 400, WAIT_TIME 50
 
     // one network result: scores for silence, unknown, on, off
     task infer(input signed [31:0] a, b, c, d);
@@ -31,23 +25,28 @@ module tb_decision;
     initial begin
         repeat (4) @(negedge clk); rst = 0;
 
-        for (i = 0; i < 3; i = i + 1) infer(LO, LO, HI, LO);      // 3 "on", then silence
+        infer(LO, LO, HI, LO);                                    // one "on", then silence
         infer(HI, LO, LO, LO);
-        if (lamp !== 1'b0 || ons != 0) $fatal(1, "fired on a broken streak");
+        infer(LO, LO, HI, LO);                                    // one "on" again
+        if (lamp !== 1'b0) $fatal(1, "fired on a single guess");
 
-        for (i = 0; i < 4; i = i + 1) infer(LO, LO, 1000, LO);    // "on" but margin < 2000
-        if (lamp !== 1'b0 || ons != 0) $fatal(1, "fired without confidence");
+        infer(LO, LO, LO, HI);                                    // "on" then "off": not the same
+        if (lamp !== 1'b0) $fatal(1, "fired on two different commands");
 
-        for (i = 0; i < 4; i = i + 1) infer(LO, LO, HI, LO);      // 4 confident "on"
-        if (lamp !== 1'b1 || ons != 1) $fatal(1, "lamp did not turn on");
+        infer(HI, LO, LO, LO);
+        for (i = 0; i < 2; i = i + 1) infer(LO, LO, 300, LO);     // "on" but margin < 400
+        if (lamp !== 1'b0) $fatal(1, "fired without confidence");
 
-        for (i = 0; i < 62; i = i + 1) infer(LO, LO, LO, HI);     // "off" during cooldown
-        if (lamp !== 1'b1 || offs != 0) $fatal(1, "cooldown ignored");
+        for (i = 0; i < 2; i = i + 1) infer(LO, LO, HI, LO);      // two confident "on"
+        if (lamp !== 1'b1) $fatal(1, "lamp did not turn on");
 
-        for (i = 0; i < 4; i = i + 1) infer(LO, LO, LO, HI);      // 4 "off" after cooldown
-        if (lamp !== 1'b0 || offs != 1) $fatal(1, "lamp did not turn off");
+        for (i = 0; i < 50; i = i + 1) infer(LO, LO, LO, HI);     // "off" while waiting
+        if (lamp !== 1'b1) $fatal(1, "wait ignored");
 
-        $display("PASS tb_decision: streak, margin and cooldown behave");
+        for (i = 0; i < 2; i = i + 1) infer(LO, LO, LO, HI);      // two "off" after the wait
+        if (lamp !== 1'b0) $fatal(1, "lamp did not turn off");
+
+        $display("PASS tb_decision: twice in a row, margin and wait behave");
         $finish;
     end
 endmodule
